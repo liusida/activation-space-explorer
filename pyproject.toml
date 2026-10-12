@@ -8,11 +8,13 @@ dependencies = [
     "matplotlib>=3.9",
     "numpy>=2.0",
     "packaging>=24.0",
+    "rich>=14.0",
     "scikit-learn>=1.5",
 ]
 
 [project.optional-dependencies]
 demo = [
+    "datasets>=4.0",
     "gb10-load-llm>=0.1.2",
     "transformers>=4.51",
 ]

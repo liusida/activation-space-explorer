@@ -20,7 +20,7 @@ from core.version import __version__, repository_state
 @dataclass(frozen=True)
 class AnalysisResult:
     assignments: ClusterAssignments
-    global_projection: Projection
+    global_projection: Projection | None
     local_projections: Mapping[int, Projection]
 
 
@@ -28,14 +28,14 @@ class AnalysisResult:
 class PointAnalysis:
     cluster_id: int
     centroid_distances: FloatArray
-    global_coordinates: FloatArray
+    global_coordinates: FloatArray | None
     local_coordinates: FloatArray | None
 
 
 class ActivationSpaceExplorer:
     """Fit and apply a k-means model with global and cluster-local PCA views."""
 
-    artifact_version = 1
+    artifact_version = 2
 
     def __init__(
         self,
@@ -45,18 +45,27 @@ class ActivationSpaceExplorer:
         local_components: int = 2,
     ) -> None:
         self.clusterer = clusterer
-        self.global_projector = global_projector or PCAProjector()
+        self.global_projector = global_projector
         self.local_components = local_components
         self.local_projectors: dict[int, PCAProjector] = {}
         self.fit_warnings: tuple[str, ...] = ()
 
-    def fit(self, reference: ActivationSet) -> ActivationSpaceExplorer:
-        assignments = self.clusterer.fit_assign(reference)
-        self.global_projector.fit(reference)
+    def fit(
+        self,
+        reference: ActivationSet,
+        *,
+        progress: bool = False,
+    ) -> ActivationSpaceExplorer:
+        assignments = self.clusterer.fit_assign(reference, return_distances=False)
+        if self.global_projector is not None:
+            self.global_projector.fit(reference)
         self.local_projectors = {}
         warnings: list[str] = []
+        order = np.argsort(assignments.cluster_ids, kind="stable")
+        counts = np.bincount(assignments.cluster_ids, minlength=self.clusterer.n_clusters)
+        offsets = np.concatenate(([0], np.cumsum(counts)))
         for cluster_id in range(self.clusterer.n_clusters):
-            indices = np.flatnonzero(assignments.cluster_ids == cluster_id)
+            indices = order[offsets[cluster_id] : offsets[cluster_id + 1]]
             max_components = min(len(indices), reference.values.shape[1])
             if max_components < self.local_components:
                 warnings.append(
@@ -68,11 +77,23 @@ class ActivationSpaceExplorer:
                 random_state=self.clusterer.random_state,
             ).fit(reference.select(indices))
             self.local_projectors[cluster_id] = projector
+            if progress:
+                print(
+                    f"local PCA {cluster_id + 1:,}/{self.clusterer.n_clusters:,}",
+                    flush=True,
+                )
         self.fit_warnings = tuple(warnings)
         return self
 
-    def analyze(self, activations: ActivationSet) -> AnalysisResult:
-        assignments = self.clusterer.assign(activations)
+    def analyze(
+        self,
+        activations: ActivationSet,
+        *,
+        return_distances: bool = True,
+    ) -> AnalysisResult:
+        assignments = self.clusterer.assign(
+            activations, return_distances=return_distances
+        )
         local_projections: dict[int, Projection] = {}
         for cluster_id, projector in self.local_projectors.items():
             indices = np.flatnonzero(assignments.cluster_ids == cluster_id)
@@ -80,7 +101,11 @@ class ActivationSpaceExplorer:
                 local_projections[cluster_id] = projector.transform(activations.select(indices))
         return AnalysisResult(
             assignments=assignments,
-            global_projection=self.global_projector.transform(activations),
+            global_projection=(
+                self.global_projector.transform(activations)
+                if self.global_projector is not None
+                else None
+            ),
             local_projections=local_projections,
         )
 
@@ -94,10 +119,16 @@ class ActivationSpaceExplorer:
         cluster_id = int(assignments.cluster_ids[0])
         projector = self.local_projectors.get(cluster_id)
         local = projector.transform(values).coordinates[0] if projector is not None else None
+        if assignments.distances is None:
+            raise RuntimeError("analyze_one requires centroid distances")
         return PointAnalysis(
             cluster_id=cluster_id,
             centroid_distances=assignments.distances[0],
-            global_coordinates=self.global_projector.transform(values).coordinates[0],
+            global_coordinates=(
+                self.global_projector.transform(values).coordinates[0]
+                if self.global_projector is not None
+                else None
+            ),
             local_coordinates=local,
         )
 
@@ -105,7 +136,8 @@ class ActivationSpaceExplorer:
         directory = Path(path)
         directory.mkdir(parents=True, exist_ok=True)
         arrays: dict[str, FloatArray] = {"centroids": self.clusterer.centroids}
-        self._store_projector(arrays, "global", self.global_projector)
+        if self.global_projector is not None:
+            self._store_projector(arrays, "global", self.global_projector)
         for cluster_id, projector in self.local_projectors.items():
             self._store_projector(arrays, f"local_{cluster_id}", projector)
         np.savez_compressed(directory / "arrays.npz", **arrays)
@@ -117,8 +149,15 @@ class ActivationSpaceExplorer:
                 "random_state": self.clusterer.random_state,
                 "n_init": self.clusterer.n_init,
                 "normalize": self.clusterer.normalize,
+                "minibatch": self.clusterer.minibatch,
+                "batch_size": self.clusterer.batch_size,
+                "max_iter": self.clusterer.max_iter,
             },
-            "global_projector": self._projector_config(self.global_projector),
+            "global_projector": (
+                self._projector_config(self.global_projector)
+                if self.global_projector is not None
+                else None
+            ),
             "local_components": self.local_components,
             "local_cluster_ids": sorted(self.local_projectors),
             "fit_warnings": list(self.fit_warnings),
@@ -132,11 +171,13 @@ class ActivationSpaceExplorer:
         if manifest.get("artifact_version") != cls.artifact_version:
             raise ValueError(f"unsupported artifact version: {manifest.get('artifact_version')}")
         clusterer = KMeansClusterer(**manifest["clusterer"])
-        global_projector = PCAProjector(**manifest["global_projector"])
+        global_config = manifest["global_projector"]
+        global_projector = PCAProjector(**global_config) if global_config is not None else None
         explorer = cls(clusterer, global_projector, local_components=manifest["local_components"])
         with np.load(directory / "arrays.npz", allow_pickle=False) as arrays:
             clusterer._centroids = arrays["centroids"]
-            cls._restore_projector(arrays, "global", global_projector)
+            if global_projector is not None:
+                cls._restore_projector(arrays, "global", global_projector)
             for cluster_id in manifest["local_cluster_ids"]:
                 projector = PCAProjector(n_components=manifest["local_components"])
                 cls._restore_projector(arrays, f"local_{cluster_id}", projector)
@@ -150,6 +191,8 @@ class ActivationSpaceExplorer:
             "n_components": projector.n_components,
             "whiten": projector.whiten,
             "random_state": projector.random_state,
+            "incremental": projector.incremental,
+            "batch_size": projector.batch_size,
         }
 
     @staticmethod

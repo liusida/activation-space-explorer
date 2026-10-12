@@ -1,5 +1,6 @@
 import json
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
@@ -10,6 +11,7 @@ from core import (
     KMeansClusterer,
     PCAProjector,
     __version__,
+    plot_global,
     require_version,
 )
 
@@ -68,3 +70,39 @@ def test_core_version_requirement() -> None:
     require_version("==0.1.0")
     with pytest.raises(RuntimeError, match="requires activation-space-explorer"):
         require_version(">=99")
+
+
+def test_large_data_modes_and_3d_plotting() -> None:
+    rng = np.random.default_rng(3)
+    values = np.vstack(
+        [rng.normal(-2, 0.2, size=(20, 5)), rng.normal(2, 0.2, size=(20, 5))]
+    ).astype(np.float32)
+    activations = ActivationSet(
+        values=values,
+        sample_ids=None,
+        metadata=None,
+        source=ActivationSource("test-model", "layer", "all_tokens"),
+    )
+    explorer = ActivationSpaceExplorer(
+        KMeansClusterer(2, minibatch=True, batch_size=8, n_init=1),
+        PCAProjector(3, incremental=True, batch_size=8),
+        local_components=3,
+    ).fit(activations)
+    result = explorer.analyze(activations, return_distances=False)
+    assert result.assignments.distances is None
+    assert result.assignments.assigned_distances.shape == (40,)
+    assert result.global_projection.coordinates.shape == (40, 3)
+    axes = plot_global(result)
+    assert hasattr(axes, "zaxis")
+    plt.close(axes.figure)
+
+
+def test_explorer_can_omit_global_pca(tmp_path) -> None:
+    activations = activation_set()
+    explorer = ActivationSpaceExplorer(KMeansClusterer(2), None).fit(activations)
+    result = explorer.analyze(activations, return_distances=False)
+    assert result.global_projection is None
+    assert explorer.analyze_one(activations.values[0]).global_coordinates is None
+    explorer.save(tmp_path / "local-only")
+    loaded = ActivationSpaceExplorer.load(tmp_path / "local-only")
+    assert loaded.global_projector is None

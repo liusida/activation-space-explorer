@@ -9,11 +9,23 @@ device = "cuda"
 dtype = "bfloat16"
 
 [capture]
-reduction = "last_token"
-batch_size = 8
+dataset = "Skylion007/openwebtext"
+split = "train"
+tokens = 1000000
+context_length = 1024
+model_batch_size = 8
+shuffle_seed = 7
+shuffle_buffer = 10000
+activation_dtype = "float32"
 
 [analysis]
-n_clusters = 6
+n_clusters = 1000
 normalize = false
-pca_components = 2
+pca_components = 3
+minibatch_size = 8192
+kmeans_max_iter = 10
 random_state = 7
+
+[target]
+prompt = "Today is Friday."
+token = " Friday"

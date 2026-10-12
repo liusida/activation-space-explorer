@@ -42,8 +42,8 @@ FloatArray = npt.NDArray[np.floating]
 @dataclass(frozen=True)
 class ActivationSet:
     values: FloatArray                    # shape: (n_points, n_dimensions)
-    sample_ids: Sequence[str]             # length: n_points
-    metadata: Sequence[Mapping[str, Any]] # length: n_points
+    sample_ids: Sequence[str] | None       # optional; length: n_points
+    metadata: Sequence[Mapping[str, Any]] | None
     source: "ActivationSource"
 
     def select(self, indices: npt.ArrayLike) -> "ActivationSet": ...
@@ -61,7 +61,7 @@ class ActivationSource:
     model_revision: str | None = None
 ```
 
-`values` must be finite, two-dimensional, and use rows as independently clustered points. If token-level activations are retained, each token is a point and its sample/token coordinates belong in `metadata`.
+`values` must be finite, two-dimensional, and use rows as independently clustered points. Float32 arrays and memory maps are retained without conversion to float64. If token-level activations are retained, each token is a point. Row metadata may be omitted for very large captures and stored separately in a compact representation.
 
 ## Extraction
 
@@ -93,7 +93,7 @@ Adapters implement this protocol for PyTorch, Transformers, vision models, or ex
 @dataclass(frozen=True)
 class ClusterAssignments:
     cluster_ids: npt.NDArray[np.integer]  # shape: (n_points,)
-    distances: FloatArray                 # shape: (n_points, n_clusters)
+    distances: FloatArray | None          # optional shape: (n_points, n_clusters)
 
     @property
     def assigned_distances(self) -> FloatArray: ...
@@ -107,10 +107,18 @@ class KMeansClusterer:
         random_state: int = 0,
         n_init: int | str = "auto",
         normalize: bool = False,
+        minibatch: bool = False,
+        batch_size: int = 8192,
+        max_iter: int = 100,
     ) -> None: ...
 
     def fit(self, activations: ActivationSet | FloatArray) -> "KMeansClusterer": ...
-    def assign(self, activations: ActivationSet | FloatArray) -> ClusterAssignments: ...
+    def assign(
+        self,
+        activations: ActivationSet | FloatArray,
+        *,
+        return_distances: bool = True,
+    ) -> ClusterAssignments: ...
     def fit_assign(
         self,
         activations: ActivationSet | FloatArray,
@@ -120,7 +128,7 @@ class KMeansClusterer:
     def centroids(self) -> FloatArray: ...
 ```
 
-`assign` returns every centroid distance, not only the winning cluster. This supports ambiguity measures, outlier detection, and comparisons between alternative interpretations. Cluster IDs are arbitrary within a fit and must not be treated as stable labels across independently fitted models.
+By default, `assign` returns every centroid distance, not only the winning cluster. This supports ambiguity measures, outlier detection, and comparisons between alternative interpretations. At large scale, `return_distances=False` retains only the assigned distance and avoids materializing an `n_points × n_clusters` matrix. Cluster IDs are arbitrary within a fit and must not be treated as stable labels across independently fitted models.
 
 ## PCA projection
 
@@ -139,6 +147,8 @@ class PCAProjector:
         *,
         whiten: bool = False,
         random_state: int = 0,
+        incremental: bool = False,
+        batch_size: int = 8192,
     ) -> None: ...
 
     def fit(self, activations: ActivationSet | FloatArray) -> "PCAProjector": ...
@@ -146,7 +156,7 @@ class PCAProjector:
     def fit_transform(self, activations: ActivationSet | FloatArray) -> Projection: ...
 ```
 
-A global projector is fitted on the full reference set. A local projector is fitted only on points assigned to one cluster. New points must use the already-fitted projector to remain comparable to the reference visualization.
+A global projector is optional and, when supplied, is fitted on the full reference set. A local projector is fitted only on points assigned to one cluster. Set `incremental=True` for activation sets too large for in-memory PCA. Two- and three-component projections are supported by the Matplotlib plotting API. New points must use the already-fitted projector to remain comparable to the reference visualization.
 
 ## Explorer
 
@@ -156,7 +166,7 @@ A global projector is fitted on the full reference set. A local projector is fit
 @dataclass(frozen=True)
 class AnalysisResult:
     assignments: ClusterAssignments
-    global_projection: Projection
+    global_projection: Projection | None
     local_projections: Mapping[int, Projection]
 
 
@@ -169,8 +179,18 @@ class ActivationSpaceExplorer:
         local_components: int = 2,
     ) -> None: ...
 
-    def fit(self, reference: ActivationSet) -> "ActivationSpaceExplorer": ...
-    def analyze(self, activations: ActivationSet) -> AnalysisResult: ...
+    def fit(
+        self,
+        reference: ActivationSet,
+        *,
+        progress: bool = False,
+    ) -> "ActivationSpaceExplorer": ...
+    def analyze(
+        self,
+        activations: ActivationSet,
+        *,
+        return_distances: bool = True,
+    ) -> AnalysisResult: ...
     def analyze_one(self, activation: npt.ArrayLike) -> "PointAnalysis": ...
     def save(self, path: str) -> None: ...
 

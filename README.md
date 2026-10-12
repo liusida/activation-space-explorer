@@ -23,4 +23,6 @@ Run project commands with `uv run`, for example `uv run pytest`.
 
 See [API.md](API.md) for the proposed core library interface.
 
+See [EXPERIMENT_FRAMEWORK.md](EXPERIMENT_FRAMEWORK.md) for the shared long-run experiment runner design.
+
 The first demo targets `Qwen/Qwen3-0.6B` layer 16; see `experiments/liusida/demo/`.
