@@ -20,3 +20,7 @@ uv sync
 ```
 
 Run project commands with `uv run`, for example `uv run pytest`.
+
+See [API.md](API.md) for the proposed core library interface.
+
+The first demo targets `Qwen/Qwen3-0.6B` layer 16; see `experiments/liusida/demo/`.

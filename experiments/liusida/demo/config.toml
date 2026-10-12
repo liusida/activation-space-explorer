@@ -1,0 +1,19 @@
+[experiment]
+core_version = "==0.1.0"
+
+[model]
+id = "Qwen/Qwen3-0.6B"
+layer_index = 16
+location = "model.model.layers.16"
+device = "cuda"
+dtype = "bfloat16"
+
+[capture]
+reduction = "last_token"
+batch_size = 8
+
+[analysis]
+n_clusters = 6
+normalize = false
+pca_components = 2
+random_state = 7
