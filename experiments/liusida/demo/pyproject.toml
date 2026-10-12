@@ -1,0 +1,14 @@
+[project]
+name = "activation-space-explorer-liusida-demo"
+version = "0.1.0"
+description = "Qwen3 layer-16 activation clustering demo."
+requires-python = ">=3.11"
+dependencies = [
+    "activation-space-explorer",
+    "datasets>=4.0",
+    "gb10-load-llm>=0.1.2",
+    "transformers>=4.51",
+]
+
+[tool.uv.sources]
+activation-space-explorer = { path = "../../..", editable = true }

@@ -12,13 +12,6 @@ dependencies = [
     "scikit-learn>=1.5",
 ]
 
-[project.optional-dependencies]
-demo = [
-    "datasets>=4.0",
-    "gb10-load-llm>=0.1.2",
-    "transformers>=4.51",
-]
-
 [dependency-groups]
 dev = [
     "pytest>=8.3",

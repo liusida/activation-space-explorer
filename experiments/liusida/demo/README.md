@@ -2,17 +2,17 @@
 
 This demo streams exactly one million OpenWebText tokens, captures every token's activation after zero-based transformer layer 16, and fits 1,000 mini-batch k-means clusters. It separately captures the configured token ` Friday` in `Today is Friday.`, assigns it to its nearest cluster, fits PCA only on that cluster's OpenWebText members, and projects the target into the resulting interactive Plotly 3D view. It does not fit a global PCA. Its settings and exact required core version live in `config.toml`.
 
-On GB10:
+The demo is an independent uv project. From the repository root:
 
 ```bash
-uv sync --extra demo
-uv run --extra demo python experiments/liusida/demo/run.py
+uv sync --project experiments/liusida/demo
+uv run --project experiments/liusida/demo python experiments/liusida/demo/run.py
 ```
 
 The view highlights decoded token text containing `fri` after trimming and lowercasing. Override it without rerunning the expensive stages:
 
 ```bash
-uv run --extra demo python experiments/liusida/demo/run.py --keyword day
+uv run --project experiments/liusida/demo python experiments/liusida/demo/run.py --keyword day
 ```
 
 Generated files are written to `output/` and are ignored by Git. The float32 activation file alone is approximately 4 GiB for Qwen3-0.6B, so ensure sufficient disk space before running.
