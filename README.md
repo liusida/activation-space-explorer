@@ -13,13 +13,25 @@ experiments/<member>/<name>/  Reproducible member experiments and notable result
 
 Start experiments in your own named folder. Keep reusable methods in `core/` and document the model, data, settings, and findings with each experiment.
 
-## Setup
+## Running experiments
+
+Each experiment is its own uv project and manages its own virtual environment. You do not need a root virtual environment to run one. For example:
+
+```bash
+uv run --project experiments/liusida/demo python experiments/liusida/demo/run.py
+```
+
+On the first run, uv creates `experiments/liusida/demo/.venv`, installs its locked dependencies, and installs the root core library into that environment in editable mode.
+
+## Developing the core
+
+The root environment is only needed when changing or testing `core/`:
 
 ```bash
 uv sync
+uv run pytest
+uv run ruff check .
 ```
-
-Run project commands with `uv run`, for example `uv run pytest`.
 
 See [API.md](API.md) for the proposed core library interface.
 

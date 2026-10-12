@@ -20,7 +20,13 @@ dependencies = ["activation-space-explorer"]
 activation-space-explorer = { path = "../../..", editable = true }
 ```
 
-Run it from the repository root with `uv run --project experiments/<member>/<experiment> python experiments/<member>/<experiment>/run.py`.
+Run it from the repository root with:
+
+```bash
+uv run --project experiments/<member>/<experiment> python experiments/<member>/<experiment>/run.py
+```
+
+No separate `uv sync` is required: on the first run, uv creates the experiment's `.venv`, installs its locked dependencies, and installs the root core library there in editable mode. Members do not need the root `.venv` to run experiments. The root environment is only for developing and testing `core/` itself.
 
 Keep large generated files under `output/`; do not commit activation matrices, model weights, datasets, or other large intermediates. When a result is promising, include a concise explanation, the exact configuration and command, and small result artifacts needed to evaluate it.
 
