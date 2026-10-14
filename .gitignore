@@ -8,4 +8,6 @@ build/
 dist/
 *.egg-info/
 .DS_Store
+.ipynb_checkpoints/
 experiments/**/output/
+.icalens-runs/

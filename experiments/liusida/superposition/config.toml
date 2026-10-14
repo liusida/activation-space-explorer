@@ -1,0 +1,63 @@
+[experiment]
+core_version = "==0.1.0"
+
+[model]
+id = "Qwen/Qwen3.5-0.8B-Base"
+device = "cuda"
+dtype = "bfloat16"
+
+[ica]
+dataset = "NeelNanda/pile-10k"
+split = "train"
+text_field = "text"
+document_framing = "prepend-eos"
+layers = "all"
+context_length = 1024
+candidate_tokens = 1000000
+token_budget = 1000000
+capture_layers_at_once = 1
+fit_batch_size = 8192
+max_iter = 20
+objective_every = 1
+preprocessing = "none"
+output = "output/ica-lens"
+
+[profile]
+layers = "all"
+output = "output/ica-lens-profiled"
+dataset = "NeelNanda/pile-10k"
+split = "train"
+text_field = "text"
+input_type = "text"
+max_tokens = 100000
+context_length = 1024
+top_k_examples = 20
+logit_lens_top_k = 20
+logit_lens_batch_size = 64
+device = "cuda"
+sample_seed = 7
+
+[data]
+colors = ["red", "blue"]
+shapes = ["square", "circle"]
+target = "shape noun"
+
+[analysis]
+random_state = 7
+
+[kmeans]
+layer = 5
+dataset = "NeelNanda/pile-10k"
+split = "train"
+text_field = "text"
+document_framing = "prepend-eos"
+tokens = 1000000
+context_length = 1024
+model_batch_size = 8
+activation_dtype = "float32"
+n_clusters = 1000
+minibatch_size = 8192
+max_iter = 10
+output = "output/kmeans-layer5"
+target_prompt = "The artist painted a red square."
+target_token = "square"

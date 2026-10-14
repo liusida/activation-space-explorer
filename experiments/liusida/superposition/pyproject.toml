@@ -1,0 +1,14 @@
+[project]
+name = "activation-space-explorer-liusida-superposition"
+version = "0.1.0"
+description = "Controlled Qwen factorial superposition experiment."
+requires-python = ">=3.11"
+dependencies = [
+    "activation-space-explorer",
+    "icalens==0.4.0",
+    "ipykernel>=6.29",
+    "jupyterlab>=4.4",
+]
+
+[tool.uv.sources]
+activation-space-explorer = { path = "../../..", editable = true }
