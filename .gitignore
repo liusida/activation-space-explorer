@@ -1,11 +1,39 @@
+# Virtual environments
 .venv/
+**/.venv/
+venv/
+.env
+.env.*
+
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 .coverage
+.coverage.*
+htmlcov/
 build/
 dist/
 *.egg-info/
-.DS_Store
+.ipynb_checkpoints/
+
+# Experiment outputs & caches (activations, clusters, HTML, logs)
 experiments/**/output/
+**/serve_cache/
+
+# Editor / OS / agent tooling
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+.serena/
+
+# Local secrets / tokens (if ever dropped here)
+*.pem
+credentials*.json

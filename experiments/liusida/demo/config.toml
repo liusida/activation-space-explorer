@@ -26,6 +26,28 @@ minibatch_size = 8192
 kmeans_max_iter = 10
 random_state = 7
 
+# Soft multi-cluster visualization (render stage).
+# weight_k = softmax(-||x - c_k|| / τ); τ<=0 means median distance over all centroids.
+[visualization]
+top_k_clusters = 8
+points_per_cluster = 120
+softmax_temperature = 0.0
+# Prepend pad/eos so the first *user* token is not absolute position 0 (attention sink).
+# Set "" or false to disable. "auto" uses tokenizer.pad_token (Qwen3: <|endoftext|>).
+attention_sink_prefix = "auto"
+# Row-wise L2-normalize before joint PCA so PC1 is not dominated by activation norm.
+l2_normalize_pca = true
+
+# target.token 必须在 prompt 里恰好出现一次，且被 Qwen3 tokenizer 编成恰好 1 个 token（注意前导空格）。
+# 已验证可切换的 debug 组合（改下面两行后重跑；capture/cluster 可复用，target 及之后会重算）：
+#   prompt = "Today is Friday." / token = " Friday"          # 星期（原 demo）
+#   prompt = "Today is Monday." / token = " Monday"          # 另一个星期
+#   prompt = "The capital of France is Paris." / token = " Paris"  # 地名实体（当前）
+#   prompt = "I do not agree with that." / token = " not"    # 否定
+#   prompt = "The answer is because of gravity." / token = " because"  # 因果连接
+#   prompt = "She went to the hospital yesterday." / token = " hospital"  # 普通名词
+#   prompt = "The cat sat on the mat." / token = " cat"      # 简单名词
+# 不可用示例：token = "France" —— 实际会编成 " France"（带空格），匹配会失败。
 [target]
-prompt = "Today is Friday."
-token = " Friday"
+prompt = "She went to the hospital yesterday."
+token = " hospital"

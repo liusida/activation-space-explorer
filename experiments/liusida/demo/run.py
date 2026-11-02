@@ -13,7 +13,6 @@ import numpy as np
 import torch
 from datasets import load_dataset
 from gb10_load_llm import from_pretrained_to_cuda
-from render import write_cluster_pca_html
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from core import (
@@ -227,6 +226,8 @@ def capture(config: dict[str, Any], dimension: int, ctx: RunContext) -> Activati
 
 @torch.inference_mode()
 def capture_target(config: dict[str, Any], dimension: int) -> dict[str, Any]:
+    from analyze import extract_prompt_token_activations
+
     prompt = config["target"]["prompt"]
     target_text = config["target"]["token"]
     if prompt.count(target_text) != 1:
@@ -235,52 +236,37 @@ def capture_target(config: dict[str, Any], dimension: int) -> dict[str, Any]:
     character_stop = character_start + len(target_text)
 
     tokenizer, model = load_model(config)
-    encoded = tokenizer(
-        prompt,
-        add_special_tokens=False,
-        return_offsets_mapping=True,
-        return_tensors="pt",
+    records = extract_prompt_token_activations(
+        tokenizer=tokenizer,
+        model=model,
+        prompt=prompt,
+        layer_index=int(config["model"]["layer_index"]),
+        device=config["model"]["device"],
+        dimension=dimension,
+        config=config,
     )
-    offsets = encoded.pop("offset_mapping")[0].tolist()
     matches = [
-        index
-        for index, (start, stop) in enumerate(offsets)
-        if start == character_start and stop == character_stop
+        record
+        for record in records
+        if record["character_start"] == character_start
+        and record["character_stop"] == character_stop
     ]
     if len(matches) != 1:
-        pieces = [tokenizer.decode([token_id]) for token_id in encoded["input_ids"][0]]
+        pieces = [record["token"] for record in records]
         raise ValueError(
             f"target token {target_text!r} is not exactly one model token; pieces={pieces!r}"
         )
-    token_position = matches[0]
-    token_id = int(encoded["input_ids"][0, token_position])
-    captured: dict[str, torch.Tensor] = {}
-
-    def hook(_module: object, _inputs: object, output: object) -> None:
-        hidden = output[0] if isinstance(output, tuple) else output
-        if not isinstance(hidden, torch.Tensor):
-            raise TypeError("layer output did not contain a tensor")
-        captured["hidden"] = hidden.detach()
-
-    layer_index = int(config["model"]["layer_index"])
-    handle = model.model.layers[layer_index].register_forward_hook(hook)
-    try:
-        model_inputs = {key: value.to(config["model"]["device"]) for key, value in encoded.items()}
-        model(**model_inputs, use_cache=False)
-    finally:
-        handle.remove()
-    hidden = captured.get("hidden")
-    if hidden is None or hidden.shape[-1] != dimension:
-        actual = None if hidden is None else tuple(hidden.shape)
-        raise RuntimeError(f"unexpected target activation shape: {actual}")
+    record = matches[0]
     return {
-        "activation": hidden[0, token_position].float().cpu().numpy(),
+        "activation": np.asarray(record["activation"], dtype=np.float32),
         "prompt": prompt,
         "token": target_text,
-        "token_id": token_id,
-        "token_position": token_position,
+        "token_id": int(record["token_id"]),
+        "token_position": int(record["position"]),
+        "model_position": int(record.get("model_position", record["position"])),
         "character_start": character_start,
         "character_stop": character_stop,
+        "attention_sink_prefix": record.get("attention_sink_prefix", ""),
     }
 
 
@@ -288,15 +274,91 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--keyword",
-        default="fri",
-        help="highlight tokens whose stripped, lowercased text contains this value (default: fri)",
+        default=None,
+        help="highlight tokens whose stripped, lowercased text contains this value "
+        "(default: stripped target.token)",
+    )
+    parser.add_argument(
+        "--prompt",
+        default=None,
+        help="override config.toml [target].prompt for a one-off run",
+    )
+    parser.add_argument(
+        "--token",
+        default=None,
+        help="override config.toml [target].token (must occur once in --prompt/prompt)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="run directory (default: auto output/runs/<timestamp>_<token>/)",
+    )
+    parser.add_argument(
+        "--library",
+        type=Path,
+        default=None,
+        help="shared capture/cluster library (default: output/library/<base-hash>/)",
+    )
+    parser.add_argument(
+        "--reuse-output",
+        action="store_true",
+        help="write into --output-dir or the legacy output/ folder without auto-creating a new run",
     )
     return parser.parse_args()
 
 
-def main(*, keyword: str = "fri") -> None:
+def main(
+    *,
+    keyword: str | None = None,
+    prompt: str | None = None,
+    token: str | None = None,
+    output_dir: Path | None = None,
+    library: Path | None = None,
+    reuse_output: bool = False,
+) -> None:
+    global OUTPUT
     config = load_config()
+    if prompt is not None:
+        config.setdefault("target", {})["prompt"] = prompt
+    if token is not None:
+        config.setdefault("target", {})["token"] = token
     require_version(config["experiment"]["core_version"])
+
+    from library import (
+        OUTPUT_ROOT,
+        default_run_dir,
+        ensure_library_links,
+        library_dir_for,
+        migrate_flat_output_into_library,
+        promote_shared_into_library,
+        write_run_pointer,
+    )
+
+    migrated = migrate_flat_output_into_library(config)
+    library_path = Path(library) if library is not None else (migrated or library_dir_for(config))
+    if reuse_output:
+        run_dir = Path(output_dir) if output_dir is not None else OUTPUT_ROOT
+    else:
+        run_dir = Path(output_dir) if output_dir is not None else default_run_dir(config)
+    run_dir = run_dir.resolve()
+    library_path = library_path.resolve()
+    # Shared capture/cluster live in the library; each run gets its own run.json/html.
+    if all((library_path / name).exists() for name in (
+        "activations.f32", "token_ids.i32", "capture.json", "clusters.npz"
+    )):
+        ensure_library_links(library_path, run_dir)
+    else:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            f"[demo] library incomplete at {library_path}; "
+            "capture/cluster will write into this run and should be promoted later."
+        )
+    write_run_pointer(run_dir, library=library_path, config=config)
+    OUTPUT = run_dir
+    print(f"[demo] library = {library_path}")
+    print(f"[demo] run dir = {run_dir}")
+
     dimension = int(AutoConfig.from_pretrained(config["model"]["id"]).hidden_size)
     analysis = config["analysis"]
     components = int(analysis["pca_components"])
@@ -331,6 +393,7 @@ def main(*, keyword: str = "fri") -> None:
     def stage_capture(ctx: RunContext) -> None:
         activations = capture(config, dimension, ctx)
         runtime["activations"] = activations
+        promote_shared_into_library(OUTPUT, library_path, config)
         ctx.complete({"tokens": len(activations.values), "dimension": dimension})
 
     def validate_clusters(ctx: RunContext) -> bool:
@@ -367,6 +430,7 @@ def main(*, keyword: str = "fri") -> None:
         )
         runtime["clusterer"] = clusterer
         runtime["assignments"] = assignments
+        promote_shared_into_library(OUTPUT, library_path, config)
         ctx.complete({"clusters": clusterer.n_clusters})
 
     def validate_target(ctx: RunContext) -> bool:
@@ -451,110 +515,67 @@ def main(*, keyword: str = "fri") -> None:
         )
 
     def stage_render(ctx: RunContext) -> None:
-        activations: ActivationSet = runtime["activations"]
-        explorer: ActivationSpaceExplorer = runtime["explorer"]
-        assignments: ClusterAssignments = runtime["assignments"]
+        from analyze import render_token_decomposition_html
+        from library import slugify
+
         target = runtime["target"]
-        cluster_id = target_cluster()
-        target_indices = np.flatnonzero(assignments.cluster_ids == cluster_id)
-        if not len(target_indices):
-            raise ValueError(f"target cluster {cluster_id} is empty")
-        view = activations.select(target_indices)
-        with ctx.progress(4, "steps") as progress:
-            progress.substage(f"projecting cluster {cluster_id}")
-            result = explorer.analyze(view, return_distances=False)
-            progress.advance()
-            projection = result.local_projections.get(cluster_id)
-            if projection is None:
-                raise RuntimeError(f"cluster {cluster_id} has no local PCA projector")
-            progress.substage("decoding token context")
-            token_ids = np.memmap(
+        highlight = (
+            keyword
+            if keyword is not None
+            else str(config["target"]["token"]).strip().lower()
+        )
+        token_record = {
+            "position": target["token_position"],
+            "token_id": target["token_id"],
+            "token": target["token"],
+            "character_start": target["character_start"],
+            "character_stop": target["character_stop"],
+            "activation": target["activation"],
+        }
+        shared = {
+            "activations": runtime["activations"],
+            "token_ids": np.memmap(
                 activation_paths()[1],
                 mode="r",
                 dtype=np.int32,
-                shape=(len(activations.values),),
-            )
-            target_coordinates = (
-                explorer.local_projectors[cluster_id]
-                .transform(target["activation"][None, :])
-                .coordinates
-            )
-            coordinates = np.vstack((projection.coordinates, target_coordinates))
-            context_length = int(config["capture"]["context_length"])
-            radius = 32
-            before_ids: list[list[int]] = []
-            current_ids: list[list[int]] = []
-            after_ids: list[list[int]] = []
-            for row in target_indices:
-                row = int(row)
-                sequence_start = (row // context_length) * context_length
-                sequence_stop = min(sequence_start + context_length, len(token_ids))
-                before_ids.append(token_ids[max(sequence_start, row - radius) : row].tolist())
-                current_ids.append([int(token_ids[row])])
-                after_ids.append(token_ids[row + 1 : min(sequence_stop, row + radius + 1)].tolist())
-            tokenizer = AutoTokenizer.from_pretrained(config["model"]["id"])
-            decode_options = {
-                "skip_special_tokens": False,
-                "clean_up_tokenization_spaces": False,
-            }
-            before_text = tokenizer.batch_decode(before_ids, **decode_options)
-            token_text = tokenizer.batch_decode(current_ids, **decode_options)
-            after_text = tokenizer.batch_decode(after_ids, **decode_options)
-            details = [
-                {
-                    "row": int(row),
-                    "token_id": int(token_ids[row]),
-                    "sequence": int(row) // context_length,
-                    "position": int(row) % context_length,
-                    "before": before,
-                    "token": token,
-                    "after": after,
-                }
-                for row, before, token, after in zip(
-                    target_indices, before_text, token_text, after_text, strict=True
-                )
-            ]
-            details.append(
-                {
-                    "row": "external",
-                    "token_id": target["token_id"],
-                    "sequence": "prompt",
-                    "position": target["token_position"],
-                    "before": target["prompt"][: target["character_start"]],
-                    "token": target["token"],
-                    "after": target["prompt"][target["character_stop"] :],
-                }
-            )
-            target_position = len(details) - 1
-            progress.advance()
-            progress.substage("rendering interactive Plotly view")
-            html_path = ctx.output_dir / f"target-friday-cluster-{cluster_id}-pca-3d.html"
-            write_cluster_pca_html(
+                shape=(len(runtime["activations"].values),),
+            ),
+            "clusterer": runtime["clusterer"],
+            "assignments": runtime["assignments"],
+            "dimension": dimension,
+        }
+        with ctx.progress(2, "steps") as progress:
+            progress.substage("building soft multi-cluster view")
+            token_slug = slugify(str(target["token"]), fallback="token")
+            html_path = ctx.output_dir / f"target-{token_slug}-decomp-pca-3d.html"
+            render_summary = render_token_decomposition_html(
                 html_path,
-                coordinates=coordinates,
-                explained_variance_ratio=projection.explained_variance_ratio,
-                details=details,
-                target_position=target_position,
-                model_id=config["model"]["id"],
-                layer_index=int(config["model"]["layer_index"]),
-                cluster_id=cluster_id,
-                keyword=keyword,
+                config=config,
+                shared=shared,
+                prompt=target["prompt"],
+                token_record=token_record,
+                keyword=highlight,
             )
             progress.advance()
             progress.substage("writing summary")
             summary = {
-                "tokens": len(activations.values),
+                "tokens": len(runtime["activations"].values),
                 "activation_dimension": dimension,
                 "clusters": int(analysis["n_clusters"]),
                 "pca_components": components,
                 "target_prompt": target["prompt"],
                 "target_token": target["token"],
                 "target_token_id": target["token_id"],
-                "target_cluster": cluster_id,
-                "cluster_points": len(target_indices),
-                "keyword": keyword.strip().lower(),
+                "target_cluster": render_summary["hard_cluster"],
+                "soft_top_clusters": render_summary["soft_top_clusters"],
+                "softmax_temperature": render_summary["temperature"],
+                "keyword": highlight.strip().lower(),
                 "html": html_path.name,
-                "estimated_activation_gib": math.prod(activations.values.shape) * 4 / 1024**3,
+                "run_dir": str(OUTPUT),
+                "library": str(library_path),
+                "estimated_activation_gib": math.prod(runtime["activations"].values.shape)
+                * 4
+                / 1024**3,
             }
             ctx.save_json_atomic("summary.json", summary)
             progress.advance()
@@ -605,4 +626,11 @@ def main(*, keyword: str = "fri") -> None:
 
 if __name__ == "__main__":
     arguments = parse_args()
-    main(keyword=arguments.keyword)
+    main(
+        keyword=arguments.keyword,
+        prompt=arguments.prompt,
+        token=arguments.token,
+        output_dir=arguments.output_dir,
+        library=arguments.library,
+        reuse_output=arguments.reuse_output,
+    )
